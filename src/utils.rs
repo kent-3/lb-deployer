@@ -1,6 +1,5 @@
 #![allow(unused)]
 
-use crate::RawContract;
 use crate::{
     constants::{CHAIN_ID, GAS_PRICE},
     SECRET,
@@ -11,6 +10,7 @@ use color_eyre::{
     owo_colors::OwoColorize,
     Result,
 };
+use cosmwasm_std::{Addr, ContractInfo};
 use prost::{Message, Name};
 use regex::Regex;
 use secretrs::{
@@ -40,6 +40,40 @@ pub fn sha256(input: &[u8]) -> [u8; 32] {
     hasher.update(input);
     hasher.finalize().into()
 }
+
+// TODO: Addr validate function
+
+// fn addr_validate(human: &str) -> Result<Addr> {
+//     let source_human_address = human;
+//
+//     let canonical_address = match bech32::decode(source_human_address) {
+//         Err(err) => {
+//             debug!(
+//                 "addr_validate() error while trying to decode human address {:?} as bech32: {:?}",
+//                 source_human_address, err
+//             );
+//             return write_to_memory(instance, err.to_string().as_bytes()).map(|n| n as i32);
+//         }
+//         Ok((_prefix, canonical_address)) => canonical_address,
+//     };
+//
+//     let normalized_human_address = match bech32::encode(
+//         BECH32_PREFIX_ACC_ADDR, // like we do in human_address()
+//         canonical_address.clone(),
+//     ) {
+//         Err(err) => {
+//             // Assaf: IMO This can never fail. From looking at bech32::encode, it only fails
+//             // because input prefix issues. For us the prefix is always "secert" which is valid.
+//             debug!("addr_validate() error while trying to encode canonical address {:?} to human: {:?}",  &canonical_address, err);
+//             return write_to_memory(instance, err.to_string().as_bytes()).map(|n| n as i32);
+//         }
+//         Ok(normalized_human_address) => normalized_human_address,
+//     };
+//
+//     if source_human_address != normalized_human_address {
+//         return write_to_memory(instance, b"Address is not normalized").map(|n| n as i32);
+//     }
+// }
 
 fn block_height(metadata: tonic::metadata::MetadataMap) -> u32 {
     let http_headers = metadata.into_headers();
@@ -191,7 +225,7 @@ pub async fn instantiate<T: Serialize>(
     code_hash: &str,
     init_msg: &T,
     gas: u64,
-) -> Result<RawContract> {
+) -> Result<ContractInfo> {
     info!(
         "Instantiating code {}...\n{}",
         code_id,
@@ -277,8 +311,8 @@ pub async fn instantiate<T: Serialize>(
         info!(data);
     }
 
-    let contract = RawContract {
-        address,
+    let contract = ContractInfo {
+        address: Addr::unchecked(address),
         code_hash: code_hash.into(),
     };
 
@@ -447,27 +481,27 @@ fn process_gas(tx: &TxResponse) {
     );
 }
 
-fn extract_attributes(
-    tx_response: &TxResponse,
-) -> (Option<String>, Option<String>, Option<String>) {
-    let mut fee: Option<String> = None;
-    let mut fee_payer: Option<String> = None;
-    let mut acc_seq: Option<String> = None;
-
-    for event in &tx_response.events {
-        for attr in &event.attributes {
-            match attr.key.as_ref() {
-                b"fee" => fee = Some(String::from_utf8_lossy(&attr.value).to_string()),
-                b"fee_payer" => fee_payer = Some(String::from_utf8_lossy(&attr.value).to_string()),
-                b"acc_seq" => acc_seq = Some(String::from_utf8_lossy(&attr.value).to_string()),
-                _ => {}
-            }
-        }
-    }
-    debug!(?fee, ?fee_payer, ?acc_seq);
-
-    (fee, fee_payer, acc_seq)
-}
+// fn extract_attributes(
+//     tx_response: &TxResponse,
+// ) -> (Option<String>, Option<String>, Option<String>) {
+//     let mut fee: Option<String> = None;
+//     let mut fee_payer: Option<String> = None;
+//     let mut acc_seq: Option<String> = None;
+//
+//     for event in &tx_response.events {
+//         for attr in &event.attributes {
+//             match attr.key.as_ref() {
+//                 b"fee" => fee = Some(String::from_utf8_lossy(&attr.value).to_string()),
+//                 b"fee_payer" => fee_payer = Some(String::from_utf8_lossy(&attr.value).to_string()),
+//                 b"acc_seq" => acc_seq = Some(String::from_utf8_lossy(&attr.value).to_string()),
+//                 _ => {}
+//             }
+//         }
+//     }
+//     debug!(?fee, ?fee_payer, ?acc_seq);
+//
+//     (fee, fee_payer, acc_seq)
+// }
 
 // async fn prepare_and_sign() -> Result<Vec<u8>> {
 //     let (account, block_height) = query_account(address).await?;
