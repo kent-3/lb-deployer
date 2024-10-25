@@ -29,7 +29,7 @@ impl Account {
         Account { prvk, pubk }
     }
 
-    pub fn random() -> Account {
+    pub fn new_random() -> Account {
         use nanorand::rand::Rng;
         let mut seed = [0; 64];
         let mut rng = nanorand::rand::ChaCha8::new();
@@ -48,19 +48,17 @@ impl Account {
         Addr::unchecked(self.id().as_ref())
     }
 
-    #[allow(unused)]
-    // TODO - change this back to pub(crate) later
     pub fn signing_key(&self) -> SigningKey {
         SigningKey::from(&self.prvk)
     }
 
-    pub(crate) fn id(&self) -> AccountId {
+    pub fn id(&self) -> AccountId {
         self.pubk
             .account_id("secret")
             .expect("invalid public key type")
     }
 
-    pub(crate) fn prv_pub_bytes(&self) -> ([u8; 32], [u8; 32]) {
+    fn prv_pub_bytes(&self) -> ([u8; 32], [u8; 32]) {
         let mut secret = [0u8; 32];
         secret.clone_from_slice(&self.prvk.private_key().to_bytes());
         let secret = x25519_dalek::StaticSecret::from(secret);
@@ -68,22 +66,22 @@ impl Account {
 
         (secret.to_bytes(), public.to_bytes())
     }
-}
 
-pub fn a() -> Account {
-    Account::from_mnemonic(A_MNEMONIC).unwrap()
-}
+    pub fn a() -> Self {
+        Account::from_mnemonic(A_MNEMONIC).unwrap()
+    }
 
-pub fn b() -> Account {
-    Account::from_mnemonic(B_MNEMONIC).unwrap()
-}
+    pub fn b() -> Self {
+        Account::from_mnemonic(B_MNEMONIC).unwrap()
+    }
 
-pub fn c() -> Account {
-    Account::from_mnemonic(C_MNEMONIC).unwrap()
-}
+    pub fn c() -> Self {
+        Account::from_mnemonic(C_MNEMONIC).unwrap()
+    }
 
-pub fn d() -> Account {
-    Account::from_mnemonic(D_MNEMONIC).unwrap()
+    pub fn d() -> Self {
+        Account::from_mnemonic(D_MNEMONIC).unwrap()
+    }
 }
 
 #[cfg(test)]
@@ -93,19 +91,19 @@ mod test {
     #[test]
     fn accounts_from_mnemonic() {
         assert_eq!(
-            a().addr(),
+            Account::a().addr(),
             Addr::unchecked("secret1ap26qrlp8mcq2pg6r47w43l0y8zkqm8a450s03")
         );
         assert_eq!(
-            b().addr(),
+            Account::b().addr(),
             Addr::unchecked("secret1fc3fzy78ttp0lwuujw7e52rhspxn8uj52zfyne")
         );
         assert_eq!(
-            c().addr(),
+            Account::c().addr(),
             Addr::unchecked("secret1ajz54hz8azwuy34qwy9fkjnfcrvf0dzswy0lqq")
         );
         assert_eq!(
-            d().addr(),
+            Account::d().addr(),
             Addr::unchecked("secret1ldjxljw7v4vk6zhyduywh04hpj0jdwxsmrlatf")
         );
     }

@@ -1,4 +1,4 @@
-#![allow(unused)]
+// #![allow(unused)]
 
 use crate::{
     constants::{CHAIN_ID, GAS_PRICE},
@@ -11,7 +11,7 @@ use color_eyre::{
     Result,
 };
 use cosmwasm_std::{Addr, ContractInfo};
-use prost::{Message, Name};
+use prost::Message;
 use regex::Regex;
 use secretrs::{
     compute::{MsgExecuteContract, MsgInstantiateContract, MsgStoreCode},
@@ -31,7 +31,6 @@ use secretrs::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use shade_protocol::{contract_interfaces::liquidity_book::*, utils::InstantiateCallback};
 use std::{path::Path, str::FromStr};
 use tracing::{debug, error, info, instrument};
 
@@ -380,7 +379,7 @@ pub async fn execute<T: Serialize + std::fmt::Debug>(
     process_tx(&tx_response, Some(nonce))?;
 
     let tx_msg_data = TxMsgData::decode(hex::decode(&tx_response.data)?.as_ref())?;
-    debug!("{:?}", tx_msg_data.purple());
+    debug!("{:?}", tx_msg_data);
 
     // this approach is simplest, but assumes there is only one message in the tx
     #[allow(deprecated)] // it's not actually deprecated for Secret on cosmos SDK v0.45
@@ -395,7 +394,8 @@ pub async fn execute<T: Serialize + std::fmt::Debug>(
         let decrypted_b64_string = String::from_utf8(decrypted_bytes)?;
         let decoded_bytes = BASE64_STANDARD.decode(decrypted_b64_string)?;
         let data = String::from_utf8(decoded_bytes)?;
-        info!("data: {}", data.purple());
+        info!("data: {}", data);
+        return Ok(data.into_bytes());
     }
 
     Ok(data)
