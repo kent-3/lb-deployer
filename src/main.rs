@@ -80,9 +80,9 @@ async fn main() -> Result<()> {
     let query_auth_code_id = store_code(query_auth, 1_800_000).await?;
     let snip20_code_id = store_code(snip20, 1_600_000).await?;
     let snip25_code_id = store_code(snip25, 3_800_000).await?;
-    let lb_factory_code_id = store_code(lb_factory, 2_400_000).await?;
-    let lb_pair_code_id = store_code(lb_pair, 5_000_000).await?;
-    let lb_token_code_id = store_code(lb_token, 3_200_000).await?;
+    let lb_factory_code_id = store_code(lb_factory, 2_500_000).await?;
+    let lb_pair_code_id = store_code(lb_pair, 5_200_000).await?;
+    let lb_token_code_id = store_code(lb_token, 3_300_000).await?;
     let lb_router_code_id = store_code(lb_router, 2_800_000).await?;
     let lb_staking_code_id = store_code(lb_staking, 3_800_000).await?;
 
@@ -349,7 +349,7 @@ pub async fn setup_client(
     let mut enclave_key = [0u8; 32];
     enclave_key.copy_from_slice(&enclave_key_bytes[0..32]);
 
-    let wallet = Account::from_mnemonic(MNEMONIC).expect("bad mnemonic");
+    let wallet = Account::from_mnemonic(&MNEMONIC).expect("Failed to parse mnemonic");
     let wallet_address = wallet.addr();
     // TODO: figure out a more secure seed
     let seed = sha256(wallet.addr().as_bytes());
@@ -367,7 +367,7 @@ pub async fn setup_client(
         "Initialized client with wallet address: {}",
         &wallet_address
     );
-    info!("Connected to {GRPC_URL}\n");
+    info!("Connected to {}\n", GRPC_URL);
 
     debug!(
         "Wallet encryption utils seed: {}",

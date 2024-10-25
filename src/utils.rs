@@ -394,7 +394,7 @@ pub async fn execute<T: Serialize + std::fmt::Debug>(
         let decrypted_b64_string = String::from_utf8(decrypted_bytes)?;
         let decoded_bytes = BASE64_STANDARD.decode(decrypted_b64_string)?;
         let data = String::from_utf8(decoded_bytes)?;
-        info!("data: {}", data);
+        debug!("data: {}", data);
         return Ok(data.into_bytes());
     }
 
