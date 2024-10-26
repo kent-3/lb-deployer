@@ -11,7 +11,7 @@ use crate::{
     account::Account,
     constants::{CHAIN_ID, GRPC_URL, MNEMONIC},
     support::snip20,
-    utils::{code_hash_by_code_id, execute, instantiate, sha256, store_code},
+    utils::{check_gas, code_hash_by_code_id, execute, instantiate, sha256, store_code},
 };
 use color_eyre::{owo_colors::OwoColorize, Result};
 use cosmwasm_std::{to_binary, Addr, Binary, ContractInfo, Uint128};
@@ -29,6 +29,7 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     sync::OnceLock,
+    time::Duration,
 };
 use tonic::transport::Channel;
 use tracing::{debug, info, info_span};
@@ -61,7 +62,10 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
 
-    let channel = Channel::builder(GRPC_URL.parse()?).connect().await?;
+    let channel = Channel::builder(GRPC_URL.parse()?)
+        .timeout(Duration::from_secs(60))
+        .connect()
+        .await?;
     let secretrs = setup_client(channel).await?;
     let wallet_address = secretrs.wallet.addr();
 
@@ -85,6 +89,8 @@ async fn main() -> Result<()> {
     let lb_token_code_id = store_code(lb_token, 3_300_000).await?;
     let lb_router_code_id = store_code(lb_router, 2_800_000).await?;
     let lb_staking_code_id = store_code(lb_staking, 3_800_000).await?;
+
+    info!("Gas used to store codes: {}", check_gas());
 
     // TODO: hash the code directly
     let admin_code_hash = code_hash_by_code_id(admin_code_id).await?;
@@ -331,10 +337,15 @@ async fn main() -> Result<()> {
 
     let out_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let serialized = serde_json::to_string(&deployment).expect("Failed to serialize deployment");
-    let map_file_path = out_dir.join("lb_contracts.json");
-    fs::write(&map_file_path, serialized).expect("Failed to write sf_token_map.json");
+    let map_file_path = if CHAIN_ID == "pulsar-3" {
+        out_dir.join("lb_contracts_pulsar.json")
+    } else {
+        out_dir.join("lb_contracts.json")
+    };
+    fs::write(&map_file_path, serialized).expect("Failed to write lb_contracts.json");
 
     println!("so far so good");
+    println!("Total gas used: {}", check_gas());
     Ok(())
 }
 

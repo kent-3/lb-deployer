@@ -19,7 +19,10 @@ use secretrs::{
         cosmos::{
             auth::v1beta1::{BaseAccount, QueryAccountRequest},
             base::abci::v1beta1::{TxMsgData, TxResponse},
-            tx::v1beta1::BroadcastTxRequest,
+            tx::v1beta1::{
+                AuthInfo, BroadcastMode, BroadcastTxRequest, BroadcastTxResponse, GetTxRequest,
+                GetTxResponse, Tx, TxBody, TxRaw,
+            },
         },
         secret::compute::v1beta1::{
             MsgExecuteContractResponse, MsgInstantiateContractResponse, MsgStoreCodeResponse,
@@ -27,12 +30,30 @@ use secretrs::{
         },
     },
     tx::{Body, Fee, Msg, SignDoc, SignerInfo},
-    AccountId, Coin,
+    AccountId, Any, Coin,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{path::Path, str::FromStr};
+use std::{
+    path::Path,
+    str::FromStr,
+    sync::{Arc, LazyLock, Mutex},
+    time::{Duration, Instant},
+};
+use tokio::time::sleep;
 use tracing::{debug, error, info, instrument};
+
+pub static GAS_METER: LazyLock<Arc<Mutex<u64>>> = LazyLock::new(|| Arc::new(Mutex::new(0)));
+
+pub fn update_gas(gas_used: u64) {
+    let mut gas = GAS_METER.lock().unwrap();
+    *gas += gas_used;
+}
+
+pub fn check_gas() -> u64 {
+    let gas = GAS_METER.lock().unwrap();
+    *gas
+}
 
 pub fn sha256(input: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -132,7 +153,7 @@ pub async fn store_code(path: &Path, gas: u64) -> Result<u64> {
     let account_number = account.account_number;
     let sequence = account.sequence;
     let memo = "";
-    let timeout_height = block_height + 10;
+    let timeout_height = block_height + 1000;
 
     let gas_fee_amount = gas as u128 * GAS_PRICE / 1_000_000;
     let gas_fee = Coin {
@@ -149,14 +170,81 @@ pub async fn store_code(path: &Path, gas: u64) -> Result<u64> {
     let tx_bytes = tx_signed.to_bytes()?;
     // EOF
 
-    let tx_response: TxResponse = tx_client
-        .broadcast_tx(BroadcastTxRequest { tx_bytes, mode: 1 })
-        .await?
-        .into_inner()
-        .tx_response
-        .expect("tx_response field missing");
+    let mut tx_response: TxResponse = TxResponse::default();
 
-    process_tx(&tx_response, None)?;
+    for attempt in 1..=6 {
+        match tx_client
+            .broadcast_tx(BroadcastTxRequest {
+                tx_bytes: tx_bytes.clone(),
+                mode: 2,
+            })
+            .await
+        {
+            Ok(response) => {
+                // If successful, return the response immediately
+                tx_response = response.into_inner().tx_response.unwrap();
+                break;
+            }
+            Err(e) => {
+                // Log the error and retry if attempts are left
+                eprintln!("Attempt {} failed: {}. Retrying...", attempt, e);
+                if attempt < 3 {
+                    sleep(Duration::from_secs(3)).await;
+                } else {
+                    // If it’s the last attempt, return the error
+                    return Err(e.into());
+                }
+            }
+        }
+    }
+
+    let tx = TxRaw::decode(tx_bytes.as_ref())?;
+    let body = TxBody::decode(tx.body_bytes.as_ref())?;
+    let auth_info = AuthInfo::decode(tx.auth_info_bytes.as_ref())?;
+    let tx = Tx {
+        body: Some(body),
+        auth_info: Some(auth_info),
+        signatures: tx.signatures,
+    };
+    tx_response.tx = Any::from_msg(&tx).ok();
+
+    // process_tx(&tx_response, None)?;
+
+    let tx_hash = tx_response.txhash.clone();
+    let request = GetTxRequest {
+        hash: tx_hash.clone(),
+    };
+
+    let start = Instant::now();
+    let timeout_ms = 60_000;
+
+    // sleep first because there's no point in checking right after broadcasting
+    sleep(Duration::from_millis(6000 as u64 / 2)).await;
+
+    loop {
+        info!("Checking for Tx...");
+        if let Ok(response) = tx_client.get_tx(request.clone()).await {
+            info!("Got a response!");
+            if let Some(tx_response_2) = response.into_inner().tx_response {
+                info!("Inner tx_response is Some!");
+                process_tx(&tx_response_2, None)?;
+                // so hacky
+                tx_response = tx_response_2;
+                break;
+            }
+        }
+
+        let elapsed = start.elapsed().as_millis() as u32;
+
+        if elapsed > timeout_ms {
+            return Err(eyre!(
+                "Transaction ID {} was submitted but was not yet found on the chain. You might want to check later or increase broadcast_timeout_ms from '{}'.",
+                tx_hash, timeout_ms
+            ));
+        };
+
+        sleep(Duration::from_millis(6000 as u64)).await;
+    }
 
     let tx_msg_data = TxMsgData::decode(hex::decode(&tx_response.data)?.as_ref())?;
 
@@ -279,16 +367,83 @@ pub async fn instantiate<T: Serialize>(
     let tx_signed = sign_doc.sign(private_key)?;
     let tx_bytes = tx_signed.to_bytes()?;
 
-    let tx_response: TxResponse = tx_client
-        .broadcast_tx(BroadcastTxRequest { tx_bytes, mode: 1 })
-        .await?
-        .into_inner()
-        .tx_response
-        .unwrap();
+    let mut tx_response: TxResponse = TxResponse::default();
+
+    for attempt in 1..=6 {
+        match tx_client
+            .broadcast_tx(BroadcastTxRequest {
+                tx_bytes: tx_bytes.clone(),
+                mode: 2,
+            })
+            .await
+        {
+            Ok(response) => {
+                // If successful, return the response immediately
+                tx_response = response.into_inner().tx_response.unwrap();
+                break;
+            }
+            Err(e) => {
+                // Log the error and retry if attempts are left
+                eprintln!("Attempt {} failed: {}. Retrying...", attempt, e);
+                if attempt < 3 {
+                    sleep(Duration::from_secs(3)).await;
+                } else {
+                    // If it’s the last attempt, return the error
+                    return Err(e.into());
+                }
+            }
+        }
+    }
 
     // TODO: use nonce to decrypt response (see previous work on rsecret client)
 
-    process_tx(&tx_response, Some(nonce))?;
+    let tx = TxRaw::decode(tx_bytes.as_ref())?;
+    let body = TxBody::decode(tx.body_bytes.as_ref())?;
+    let auth_info = AuthInfo::decode(tx.auth_info_bytes.as_ref())?;
+    let tx = Tx {
+        body: Some(body),
+        auth_info: Some(auth_info),
+        signatures: tx.signatures,
+    };
+    tx_response.tx = Any::from_msg(&tx).ok();
+
+    // process_tx(&tx_response, None)?;
+
+    let tx_hash = tx_response.txhash.clone();
+    let request = GetTxRequest {
+        hash: tx_hash.clone(),
+    };
+
+    let start = Instant::now();
+    let timeout_ms = 60_000;
+
+    // sleep first because there's no point in checking right after broadcasting
+    sleep(Duration::from_millis(6000 as u64 / 2)).await;
+
+    loop {
+        info!("Checking for Tx...");
+        if let Ok(response) = tx_client.get_tx(request.clone()).await {
+            info!("Got a response!");
+            if let Some(tx_response_2) = response.into_inner().tx_response {
+                info!("Inner tx_response is Some!");
+                process_tx(&tx_response_2, None)?;
+                // so hacky
+                tx_response = tx_response_2;
+                break;
+            }
+        }
+
+        let elapsed = start.elapsed().as_millis() as u32;
+
+        if elapsed > timeout_ms {
+            return Err(eyre!(
+                "Transaction ID {} was submitted but was not yet found on the chain. You might want to check later or increase broadcast_timeout_ms from '{}'.",
+                tx_hash, timeout_ms
+            ));
+        };
+
+        sleep(Duration::from_millis(6000 as u64)).await;
+    }
 
     let tx_msg_data = TxMsgData::decode(hex::decode(&tx_response.data)?.as_ref())?;
 
@@ -367,16 +522,83 @@ pub async fn execute<T: Serialize + std::fmt::Debug>(
     let tx_signed = sign_doc.sign(private_key)?;
     let tx_bytes = tx_signed.to_bytes()?;
 
-    let tx_response: TxResponse = tx_client
-        .broadcast_tx(BroadcastTxRequest { tx_bytes, mode: 1 })
-        .await?
-        .into_inner()
-        .tx_response
-        .unwrap();
+    let mut tx_response: TxResponse = TxResponse::default();
+
+    for attempt in 1..=6 {
+        match tx_client
+            .broadcast_tx(BroadcastTxRequest {
+                tx_bytes: tx_bytes.clone(),
+                mode: 2,
+            })
+            .await
+        {
+            Ok(response) => {
+                // If successful, return the response immediately
+                tx_response = response.into_inner().tx_response.unwrap();
+                break;
+            }
+            Err(e) => {
+                // Log the error and retry if attempts are left
+                eprintln!("Attempt {} failed: {}. Retrying...", attempt, e);
+                if attempt < 3 {
+                    sleep(Duration::from_secs(3)).await;
+                } else {
+                    // If it’s the last attempt, return the error
+                    return Err(e.into());
+                }
+            }
+        }
+    }
 
     // TODO: use nonce to decrypt response (see previous work on rsecret client)
 
-    process_tx(&tx_response, Some(nonce))?;
+    let tx = TxRaw::decode(tx_bytes.as_ref())?;
+    let body = TxBody::decode(tx.body_bytes.as_ref())?;
+    let auth_info = AuthInfo::decode(tx.auth_info_bytes.as_ref())?;
+    let tx = Tx {
+        body: Some(body),
+        auth_info: Some(auth_info),
+        signatures: tx.signatures,
+    };
+    tx_response.tx = Any::from_msg(&tx).ok();
+
+    // process_tx(&tx_response, None)?;
+
+    let tx_hash = tx_response.txhash.clone();
+    let request = GetTxRequest {
+        hash: tx_hash.clone(),
+    };
+
+    let start = Instant::now();
+    let timeout_ms = 60_000;
+
+    // sleep first because there's no point in checking right after broadcasting
+    sleep(Duration::from_millis(6000 as u64 / 2)).await;
+
+    loop {
+        info!("Checking for Tx...");
+        if let Ok(response) = tx_client.get_tx(request.clone()).await {
+            info!("Got a response!");
+            if let Some(tx_response_2) = response.into_inner().tx_response {
+                info!("Inner tx_response is Some!");
+                process_tx(&tx_response_2, None)?;
+                // so hacky
+                tx_response = tx_response_2;
+                break;
+            }
+        }
+
+        let elapsed = start.elapsed().as_millis() as u32;
+
+        if elapsed > timeout_ms {
+            return Err(eyre!(
+                "Transaction ID {} was submitted but was not yet found on the chain. You might want to check later or increase broadcast_timeout_ms from '{}'.",
+                tx_hash, timeout_ms
+            ));
+        };
+
+        sleep(Duration::from_millis(6000 as u64)).await;
+    }
 
     let tx_msg_data = TxMsgData::decode(hex::decode(&tx_response.data)?.as_ref())?;
     debug!("{:?}", tx_msg_data);
@@ -416,7 +638,7 @@ pub async fn code_hash_by_code_id(code_id: u64) -> Result<String> {
 }
 
 fn process_tx(tx: &TxResponse, nonce: Option<[u8; 32]>) -> Result<()> {
-    debug!("{:#?}", tx);
+    debug!("{:?}", tx);
 
     if tx.code != 0 {
         process_tx_error(tx, nonce);
@@ -471,6 +693,8 @@ fn process_gas(tx: &TxResponse) {
     } else {
         ((recommended + 99_999) / 100_000) * 100_000
     };
+
+    update_gas(gas_used as u64);
 
     info!(
         "Gas used: {}/{} {}, Recommended: {}",
