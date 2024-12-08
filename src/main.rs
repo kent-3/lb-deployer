@@ -15,16 +15,14 @@ use crate::{
 };
 use color_eyre::{owo_colors::OwoColorize, Result};
 use cosmwasm_std::{to_binary, Addr, Binary, ContractInfo, Uint128};
+use lb_interfaces::*;
 use lb_pair::{LbPair, RewardsDistributionAlgorithm};
 use secretrs::{
     grpc_clients::{AuthQueryClient, ComputeQueryClient, RegistrationQueryClient, TxServiceClient},
     utils::EnigmaUtils,
 };
 use serde::{Deserialize, Serialize};
-use shade_protocol::{
-    contract_interfaces::liquidity_book::*, swap::core::TokenType, utils::asset::RawContract,
-    Contract,
-};
+use shade_protocol::{swap::core::TokenType, utils::asset::RawContract, Contract};
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -72,6 +70,7 @@ async fn main() -> Result<()> {
     // Store Code
     let admin = Path::new("./code/admin.wasm.gz");
     let query_auth = Path::new("./code/query_auth.wasm.gz");
+    let query_router = Path::new("./code/query_router.wasm");
     let snip20 = Path::new("./code/snip20.wasm.gz");
     let snip25 = Path::new("./code/snip25-amber.wasm.gz");
     let lb_factory = Path::new("./code/lb_factory.wasm.gz");
@@ -80,21 +79,23 @@ async fn main() -> Result<()> {
     let lb_router = Path::new("./code/lb_router.wasm.gz");
     let lb_staking = Path::new("./code/lb_staking.wasm.gz");
 
-    let admin_code_id = store_code(admin, 1_300_000).await?;
-    let query_auth_code_id = store_code(query_auth, 1_800_000).await?;
-    let snip20_code_id = store_code(snip20, 1_600_000).await?;
-    let snip25_code_id = store_code(snip25, 3_800_000).await?;
-    let lb_factory_code_id = store_code(lb_factory, 2_500_000).await?;
-    let lb_pair_code_id = store_code(lb_pair, 5_200_000).await?;
-    let lb_token_code_id = store_code(lb_token, 3_300_000).await?;
-    let lb_router_code_id = store_code(lb_router, 2_800_000).await?;
-    let lb_staking_code_id = store_code(lb_staking, 3_800_000).await?;
+    let admin_code_id = store_code(admin, 1_000_000).await?;
+    let query_auth_code_id = store_code(query_auth, 1_400_000).await?;
+    let query_router_code_id = store_code(query_router, 1_700_000).await?;
+    let snip20_code_id = store_code(snip20, 1_200_000).await?;
+    let snip25_code_id = store_code(snip25, 2_900_000).await?;
+    let lb_factory_code_id = store_code(lb_factory, 1_900_000).await?;
+    let lb_pair_code_id = store_code(lb_pair, 4_000_000).await?;
+    let lb_token_code_id = store_code(lb_token, 2_600_000).await?;
+    let lb_router_code_id = store_code(lb_router, 2_200_000).await?;
+    let lb_staking_code_id = store_code(lb_staking, 3_000_000).await?;
 
     info!("Gas used to store codes: {}", check_gas());
 
     // TODO: hash the code directly
     let admin_code_hash = code_hash_by_code_id(admin_code_id).await?;
     let query_auth_code_hash = code_hash_by_code_id(query_auth_code_id).await?;
+    let query_router_code_hash = code_hash_by_code_id(query_router_code_id).await?;
     let snip20_code_hash = code_hash_by_code_id(snip20_code_id).await?;
     let snip25_code_hash = code_hash_by_code_id(snip25_code_id).await?;
     let lb_factory_code_hash = code_hash_by_code_id(lb_factory_code_id).await?;
@@ -109,7 +110,7 @@ async fn main() -> Result<()> {
     let admin_init_msg = shade_protocol::contract_interfaces::admin::InstantiateMsg {
         super_admin: Some(wallet_address.to_string()),
     };
-    let admin = instantiate(admin_code_id, &admin_code_hash, &admin_init_msg, 50_000).await?;
+    let admin = instantiate(admin_code_id, &admin_code_hash, &admin_init_msg, 100_000).await?;
 
     info!("Instantiating query_auth...",);
     let query_auth_init_msg = shade_protocol::contract_interfaces::query_auth::InstantiateMsg {
@@ -123,7 +124,20 @@ async fn main() -> Result<()> {
         query_auth_code_id,
         &query_auth_code_hash,
         &query_auth_init_msg,
-        60_000,
+        100_000,
+    )
+    .await?;
+
+    #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+    pub struct EmptyInstantiateMsg {}
+
+    info!("Instantiating batch_query_router...",);
+    let query_router_init_msg = EmptyInstantiateMsg {};
+    let query_router = instantiate(
+        query_router_code_id,
+        &query_router_code_hash,
+        &query_router_init_msg,
+        100_000,
     )
     .await?;
 
@@ -147,7 +161,7 @@ async fn main() -> Result<()> {
         lb_factory_code_id,
         &lb_factory_code_hash,
         &lb_factory_init_msg,
-        70_000,
+        100_000,
     )
     .await?;
 
@@ -167,7 +181,7 @@ async fn main() -> Result<()> {
         config: None,
         supported_denoms: Some(vec!["uscrt".to_string()]),
     };
-    let snip20 = instantiate(snip20_code_id, &snip20_code_hash, &snip20_init_msg, 60_000).await?;
+    let snip20 = instantiate(snip20_code_id, &snip20_code_hash, &snip20_init_msg, 100_000).await?;
 
     info!("Instantiating snip25...",);
     let snip25_init_msg = snip20::InstantiateMsg {
@@ -183,7 +197,7 @@ async fn main() -> Result<()> {
         config: None,
         supported_denoms: None,
     };
-    let snip25 = instantiate(snip25_code_id, &snip25_code_hash, &snip25_init_msg, 90_000).await?;
+    let snip25 = instantiate(snip25_code_id, &snip25_code_hash, &snip25_init_msg, 100_000).await?;
 
     // Factory Setup
 
@@ -211,22 +225,23 @@ async fn main() -> Result<()> {
             },
         };
     info!("Setting lb_pair implementation...",);
-    execute(address, code_hash, set_lb_pair_implementation_msg, 80_000).await?;
+    execute(address, code_hash, set_lb_pair_implementation_msg, 100_000).await?;
     info!("Setting lb_token implementation...",);
-    execute(address, code_hash, set_lb_token_implementation_msg, 80_000).await?;
+    execute(address, code_hash, set_lb_token_implementation_msg, 100_000).await?;
     info!("Setting staking contract implementation...",);
-    execute(address, code_hash, set_staking_implementation_msg, 80_000).await?;
+    execute(address, code_hash, set_staking_implementation_msg, 100_000).await?;
 
     // TODO: determine sensible values
     let set_pair_preset_msg = &lb_factory::ExecuteMsg::SetPairPreset {
         bin_step: 100,
-        base_factor: 5000,
-        filter_period: 0,
-        decay_period: 1,
-        reduction_factor: 0,
-        variable_fee_control: 0,
-        protocol_share: 1000,
-        max_volatility_accumulator: 350000,
+        base_factor: 5_000,
+        filter_period: 30,
+        decay_period: 600,
+        reduction_factor: 5_000,
+        variable_fee_control: 5_000,
+        protocol_share: 0,
+        max_volatility_accumulator: 350_000,
+        // sample_lifetime: 120,
         is_open: true,
         // TODO: all this staking stuff should not be here?
         total_reward_bins: 100,
@@ -236,7 +251,7 @@ async fn main() -> Result<()> {
         expiry_staking_duration: Some(9),
     };
     info!("Setting pair presets for bin_step = 100...",);
-    execute(address, code_hash, set_pair_preset_msg, 80_000).await?;
+    execute(address, code_hash, set_pair_preset_msg, 100_000).await?;
 
     let add_quote_asset_msg = &lb_factory::ExecuteMsg::AddQuoteAsset {
         asset: TokenType::CustomToken {
@@ -245,7 +260,7 @@ async fn main() -> Result<()> {
         },
     };
     info!("Adding sSCRT as a quote asset...",);
-    execute(address, code_hash, add_quote_asset_msg, 80_000).await?;
+    execute(address, code_hash, add_quote_asset_msg, 100_000).await?;
 
     let create_lb_pair_msg = &lb_factory::ExecuteMsg::CreateLbPair {
         token_x: TokenType::CustomToken {
@@ -263,10 +278,13 @@ async fn main() -> Result<()> {
     };
 
     info!("Creating an Lb Pair...",);
-    let response = execute(address, code_hash, create_lb_pair_msg, 600_000).await?;
+    let response = execute(address, code_hash, create_lb_pair_msg, 700_000).await?;
 
     let created_lb_pair = serde_json::from_slice::<LbPair>(&response)?;
     info!("{:#?}", created_lb_pair);
+
+    // TODO: Next steps:
+    // increase length of oracle
 
     let lb_pair = ContractInfo {
         address: created_lb_pair.contract.address,
@@ -337,12 +355,14 @@ async fn main() -> Result<()> {
 
     let out_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let serialized = serde_json::to_string(&deployment).expect("Failed to serialize deployment");
-    let map_file_path = if CHAIN_ID == "pulsar-3" {
+    let map_file_path = if CHAIN_ID == "secretdev-1" {
+        out_dir.join("lb_contracts_dev.json")
+    } else if CHAIN_ID == "pulsar-3" {
         out_dir.join("lb_contracts_pulsar.json")
     } else {
         out_dir.join("lb_contracts.json")
     };
-    fs::write(&map_file_path, serialized).expect("Failed to write lb_contracts.json");
+    fs::write(&map_file_path, serialized).expect("Failed to write lb_contracts json file!");
 
     println!("so far so good");
     println!("Total gas used: {}", check_gas());

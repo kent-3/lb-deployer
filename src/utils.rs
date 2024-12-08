@@ -249,11 +249,11 @@ pub async fn store_code(path: &Path, gas: u64) -> Result<u64> {
     let tx_msg_data = TxMsgData::decode(hex::decode(&tx_response.data)?.as_ref())?;
 
     // this approach is simplest, but assumes there is only one message in the tx
-    #[allow(deprecated)] // it's not actually deprecated for Secret on cosmos SDK v0.45
-    let msg_data = tx_msg_data.data.first().expect("empty data field");
+    // #[allow(deprecated)] // it's not actually deprecated for Secret on cosmos SDK v0.45
+    let msg_data = tx_msg_data.msg_responses.first().expect("empty data field");
 
     // the message was a MsgStoreCode, so the data is a MsgStoreCodeResponse
-    let MsgStoreCodeResponse { code_id } = MsgStoreCodeResponse::decode(msg_data.data.as_slice())?;
+    let MsgStoreCodeResponse { code_id } = MsgStoreCodeResponse::decode(msg_data.value.as_slice())?;
     // info!("Code ID: {}", code_id.bright_white());
 
     let file = path.file_name().unwrap().to_string_lossy().to_string();
@@ -369,7 +369,7 @@ pub async fn instantiate<T: Serialize>(
 
     let mut tx_response: TxResponse = TxResponse::default();
 
-    for attempt in 1..=6 {
+    for attempt in 1..=100 {
         match tx_client
             .broadcast_tx(BroadcastTxRequest {
                 tx_bytes: tx_bytes.clone(),
@@ -385,8 +385,8 @@ pub async fn instantiate<T: Serialize>(
             Err(e) => {
                 // Log the error and retry if attempts are left
                 eprintln!("Attempt {} failed: {}. Retrying...", attempt, e);
-                if attempt < 3 {
-                    sleep(Duration::from_secs(3)).await;
+                if attempt < 100 {
+                    sleep(Duration::from_secs(15)).await;
                 } else {
                     // If it’s the last attempt, return the error
                     return Err(e.into());
@@ -448,12 +448,12 @@ pub async fn instantiate<T: Serialize>(
     let tx_msg_data = TxMsgData::decode(hex::decode(&tx_response.data)?.as_ref())?;
 
     // this approach is simplest, but assumes there is only one message in the tx
-    #[allow(deprecated)] // it's not actually deprecated for Secret on cosmos SDK v0.45
-    let msg_data = tx_msg_data.data.first().expect("empty data field");
+    // #[allow(deprecated)] // it's not actually deprecated for Secret on cosmos SDK v0.45
+    let msg_data = tx_msg_data.msg_responses.first().expect("empty data field");
 
     // the message was a MsgInstantiateContract, so the data is a MsgInstantiateContractResponse
     let MsgInstantiateContractResponse { address, data } =
-        MsgInstantiateContractResponse::decode(msg_data.data.as_slice())?;
+        MsgInstantiateContractResponse::decode(msg_data.value.as_slice())?;
 
     info!(address, code_hash, "New contract!");
 
@@ -524,7 +524,7 @@ pub async fn execute<T: Serialize + std::fmt::Debug>(
 
     let mut tx_response: TxResponse = TxResponse::default();
 
-    for attempt in 1..=6 {
+    for attempt in 1..=100 {
         match tx_client
             .broadcast_tx(BroadcastTxRequest {
                 tx_bytes: tx_bytes.clone(),
@@ -540,8 +540,8 @@ pub async fn execute<T: Serialize + std::fmt::Debug>(
             Err(e) => {
                 // Log the error and retry if attempts are left
                 eprintln!("Attempt {} failed: {}. Retrying...", attempt, e);
-                if attempt < 3 {
-                    sleep(Duration::from_secs(3)).await;
+                if attempt < 100 {
+                    sleep(Duration::from_secs(15)).await;
                 } else {
                     // If it’s the last attempt, return the error
                     return Err(e.into());
@@ -604,12 +604,12 @@ pub async fn execute<T: Serialize + std::fmt::Debug>(
     debug!("{:?}", tx_msg_data);
 
     // this approach is simplest, but assumes there is only one message in the tx
-    #[allow(deprecated)] // it's not actually deprecated for Secret on cosmos SDK v0.45
-    let msg_data = tx_msg_data.data.first().expect("empty data field");
+    // #[allow(deprecated)] // it's not actually deprecated for Secret on cosmos SDK v0.45
+    let msg_data = tx_msg_data.msg_responses.first().expect("empty data field");
 
     // the message was a MsgExecuteContract, so the data is a MsgExecuteContractResponse
     let MsgExecuteContractResponse { data } =
-        MsgExecuteContractResponse::decode(msg_data.data.as_slice())?;
+        MsgExecuteContractResponse::decode(msg_data.value.as_slice())?;
 
     if !data.is_empty() {
         let decrypted_bytes = secretrs.utils.decrypt(&nonce, &data)?;
