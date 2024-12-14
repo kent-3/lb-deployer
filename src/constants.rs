@@ -1,7 +1,9 @@
 // Testnet
-// pub static GRPC_URL: &str = "http://grpc.testnet.secretsaturn.net:9090";
+// pub static GRPC_URL: &str = "http://grpcbin.pulsar.scrttestnet.com:9099";
+// pub static GRPC_URL: &str = "http://131.153.174.10:9090";
 // pub static CHAIN_ID: &str = "pulsar-3";
-// pub static MNEMONIC: &str = "";
+// pub static MNEMONIC: &str =
+//     "spider fitness dice mind clutch happy cancel supreme shed engage guard grit";
 
 // Devnet
 pub static GRPC_URL: &str = "http://localhost:9090";

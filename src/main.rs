@@ -16,7 +16,8 @@ use crate::{
 use color_eyre::{owo_colors::OwoColorize, Result};
 use cosmwasm_std::{to_binary, Addr, Binary, ContractInfo, Uint128};
 use lb_interfaces::*;
-use lb_pair::{LbPair, RewardsDistributionAlgorithm};
+use lb_pair::LbPair;
+use lb_router::CreateLbPairResponse;
 use secretrs::{
     grpc_clients::{AuthQueryClient, ComputeQueryClient, RegistrationQueryClient, TxServiceClient},
     utils::EnigmaUtils,
@@ -77,7 +78,7 @@ async fn main() -> Result<()> {
     let lb_pair = Path::new("./code/lb_pair.wasm.gz");
     let lb_token = Path::new("./code/lb_token.wasm.gz");
     let lb_router = Path::new("./code/lb_router.wasm.gz");
-    let lb_staking = Path::new("./code/lb_staking.wasm.gz");
+    let lb_quoter = Path::new("./code/lb_quoter.wasm.gz");
 
     let admin_code_id = store_code(admin, 1_000_000).await?;
     let query_auth_code_id = store_code(query_auth, 1_400_000).await?;
@@ -87,8 +88,8 @@ async fn main() -> Result<()> {
     let lb_factory_code_id = store_code(lb_factory, 1_900_000).await?;
     let lb_pair_code_id = store_code(lb_pair, 4_000_000).await?;
     let lb_token_code_id = store_code(lb_token, 2_600_000).await?;
-    let lb_router_code_id = store_code(lb_router, 2_200_000).await?;
-    let lb_staking_code_id = store_code(lb_staking, 3_000_000).await?;
+    let lb_router_code_id = store_code(lb_router, 2_000_000).await?;
+    let lb_quoter_code_id = store_code(lb_quoter, 1_000_000).await?;
 
     info!("Gas used to store codes: {}", check_gas());
 
@@ -102,7 +103,7 @@ async fn main() -> Result<()> {
     let lb_pair_code_hash = code_hash_by_code_id(lb_pair_code_id).await?;
     let lb_token_code_hash = code_hash_by_code_id(lb_token_code_id).await?;
     let lb_router_code_hash = code_hash_by_code_id(lb_router_code_id).await?;
-    let lb_staking_code_hash = code_hash_by_code_id(lb_staking_code_id).await?;
+    let lb_quoter_code_hash = code_hash_by_code_id(lb_quoter_code_id).await?;
 
     // Instantiate
 
@@ -154,13 +155,42 @@ async fn main() -> Result<()> {
         },
         owner: Some(wallet_address.clone()),
         fee_recipient: wallet_address.clone(),
-        recover_staking_funds_receiver: wallet_address.clone(),
-        max_bins_per_swap: None,
     };
     let lb_factory = instantiate(
         lb_factory_code_id,
         &lb_factory_code_hash,
         &lb_factory_init_msg,
+        100_000,
+    )
+    .await?;
+
+    info!("Instantiating lb_router...",);
+    let lb_router_init_msg = lb_router::InstantiateMsg {
+        factory: lb_factory.clone(),
+    };
+    let lb_router = instantiate(
+        lb_router_code_id,
+        &lb_router_code_hash,
+        &lb_router_init_msg,
+        100_000,
+    )
+    .await?;
+
+    info!("Instantiating lb_quoter...",);
+    let lb_quoter_init_msg = lb_quoter::InstantiateMsg {
+        factory_v2_2: Some(RawContract {
+            address: lb_factory.address.clone().to_string(),
+            code_hash: lb_factory.code_hash.clone(),
+        }),
+        router_v2_2: Some(RawContract {
+            address: lb_router.address.clone().to_string(),
+            code_hash: lb_router.code_hash.clone(),
+        }),
+    };
+    let lb_quoter = instantiate(
+        lb_quoter_code_id,
+        &lb_quoter_code_hash,
+        &lb_quoter_init_msg,
         100_000,
     )
     .await?;
@@ -217,19 +247,10 @@ async fn main() -> Result<()> {
             code_hash: lb_token_code_hash.to_string(),
         },
     };
-    let set_staking_implementation_msg =
-        &lb_factory::ExecuteMsg::SetStakingContractImplementation {
-            implementation: lb_factory::ContractImplementation {
-                id: lb_staking_code_id,
-                code_hash: lb_staking_code_hash.to_string(),
-            },
-        };
     info!("Setting lb_pair implementation...",);
     execute(address, code_hash, set_lb_pair_implementation_msg, 100_000).await?;
     info!("Setting lb_token implementation...",);
     execute(address, code_hash, set_lb_token_implementation_msg, 100_000).await?;
-    info!("Setting staking contract implementation...",);
-    execute(address, code_hash, set_staking_implementation_msg, 100_000).await?;
 
     // TODO: determine sensible values
     let set_pair_preset_msg = &lb_factory::ExecuteMsg::SetPairPreset {
@@ -243,12 +264,6 @@ async fn main() -> Result<()> {
         max_volatility_accumulator: 350_000,
         // sample_lifetime: 120,
         is_open: true,
-        // TODO: all this staking stuff should not be here?
-        total_reward_bins: 100,
-        rewards_distribution_algorithm: RewardsDistributionAlgorithm::TimeBasedRewards,
-        epoch_staking_index: 1,
-        epoch_staking_duration: 10,
-        expiry_staking_duration: Some(9),
     };
     info!("Setting pair presets for bin_step = 100...",);
     execute(address, code_hash, set_pair_preset_msg, 100_000).await?;
@@ -262,7 +277,13 @@ async fn main() -> Result<()> {
     info!("Adding sSCRT as a quote asset...",);
     execute(address, code_hash, add_quote_asset_msg, 100_000).await?;
 
-    let create_lb_pair_msg = &lb_factory::ExecuteMsg::CreateLbPair {
+    // Use the router to create a pair
+    // this ensures the viewing key is always the same, and has stronger entropy
+
+    let address = lb_router.address.as_str();
+    let code_hash = lb_router_code_hash.as_str();
+
+    let create_lb_pair_msg = &lb_router::ExecuteMsg::CreateLbPair {
         token_x: TokenType::CustomToken {
             contract_addr: Addr::unchecked(snip25.address.as_str()),
             token_code_hash: snip25_code_hash.to_string(),
@@ -273,18 +294,19 @@ async fn main() -> Result<()> {
         },
         active_id: 8_388_608,
         bin_step: 100,
-        viewing_key: "lb_rocks".to_string(),
-        entropy: "lb_rocks".to_string(),
+        // viewing_key: "lb_rocks".to_string(),
+        // entropy: "lb_rocks".to_string(),
     };
 
     info!("Creating an Lb Pair...",);
     let response = execute(address, code_hash, create_lb_pair_msg, 700_000).await?;
 
-    let created_lb_pair = serde_json::from_slice::<LbPair>(&response)?;
+    let created_lb_pair = serde_json::from_slice::<CreateLbPairResponse>(&response)?.lb_pair;
     info!("{:#?}", created_lb_pair);
 
     // TODO: Next steps:
     // increase length of oracle
+    // add liquidity
 
     let lb_pair = ContractInfo {
         address: created_lb_pair.contract.address,
@@ -293,14 +315,6 @@ async fn main() -> Result<()> {
     let lb_token = ContractInfo {
         address: Addr::unchecked(""),
         code_hash: lb_token_code_hash.to_string(),
-    };
-    let lb_router = ContractInfo {
-        address: Addr::unchecked(""),
-        code_hash: lb_router_code_hash.to_string(),
-    };
-    let lb_staking = ContractInfo {
-        address: Addr::unchecked(""),
-        code_hash: lb_staking_code_hash.to_string(),
     };
 
     let deployment = DeployedContracts {
@@ -344,10 +358,10 @@ async fn main() -> Result<()> {
             code_hash: lb_router.code_hash,
             code_id: lb_router_code_id,
         },
-        lb_staking: DeployedContractInfo {
-            address: lb_staking.address,
-            code_hash: lb_staking.code_hash,
-            code_id: lb_staking_code_id,
+        lb_quoter: DeployedContractInfo {
+            address: lb_quoter.address,
+            code_hash: lb_quoter.code_hash,
+            code_id: lb_quoter_code_id,
         },
     };
 
@@ -435,7 +449,7 @@ pub struct DeployedContracts {
     pub lb_pair: DeployedContractInfo,
     pub lb_token: DeployedContractInfo,
     pub lb_router: DeployedContractInfo,
-    pub lb_staking: DeployedContractInfo,
+    pub lb_quoter: DeployedContractInfo,
 }
 
 impl DeployedContracts {
@@ -449,7 +463,7 @@ impl DeployedContracts {
             lb_pair: DeployedContractInfo::default(),
             lb_token: DeployedContractInfo::default(),
             lb_router: DeployedContractInfo::default(),
-            lb_staking: DeployedContractInfo::default(),
+            lb_quoter: DeployedContractInfo::default(),
         }
     }
 }
