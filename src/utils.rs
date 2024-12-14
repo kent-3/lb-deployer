@@ -347,7 +347,7 @@ pub async fn instantiate<T: Serialize>(
     let account_number = account.account_number;
     let sequence = account.sequence;
     let memo = "";
-    let timeout_height = block_height + 10;
+    let timeout_height = block_height + 100;
 
     let gas_fee_amount = gas as u128 * GAS_PRICE / 1_000_000;
     let gas_fee = Coin {
